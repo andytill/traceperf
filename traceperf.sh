@@ -5,7 +5,7 @@ set -e
 
 erlc traceperf.erl
 
-num_calls=500000
+num_calls=1000000
 
 trace_file=/tmp/trace-perf-log
 

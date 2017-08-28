@@ -11,6 +11,8 @@
 
 -define(TRACER_TCP_PORT, 6666).
 
+-define(REMOTE_NODE_NAME, 'remote_node@127.0.0.1').
+
 start(idle, _) ->
     %% do as little as possible to see how much utlisation is
     %% background noise from the beam
@@ -21,7 +23,7 @@ start(Tracer_type, Calls) ->
         {ok,_} = dbg:start(),
         tracer(Tracer_type, Calls),
         {ok,_} = apply_tracing(),
-        Arg = binary:copy(<<"q">>, 10000),
+        Arg = binary:copy(<<"q">>, 5*1024),
         ok = execute_function_calls(Arg, Calls),
         ok = await_trace_received_completion(Tracer_type),
         ok = dbg:stop()
@@ -44,6 +46,7 @@ call_traced_function(Arg, Calls) ->
 execute_function_calls(Arg, Calls_total) ->
     Num_schedulers = erlang:system_info(schedulers),
     Process_calls = Calls_total div Num_schedulers,
+    Rem_traces = Calls_total rem Num_schedulers,
     Self = self(),
     Fn =
         fun() ->
@@ -51,6 +54,7 @@ execute_function_calls(Arg, Calls_total) ->
             Self ! {self(), completed}
         end,
     Pids = [spawn_link(Fn) || _ <- lists:seq(1,Num_schedulers)],
+    [traced_function(Arg) || _ <- lists:seq(1,Rem_traces)],
     await_call_completion(Pids).
 
 await_call_completion([]) ->
@@ -79,14 +83,17 @@ tracer(?LOCAL_PROCESS, Calls) when is_integer(Calls) ->
          end, Acc});
 tracer(?FILE_PORT, _) ->
     {ok,_} = dbg:tracer(port,dbg:trace_port(file,"/tmp/trace-perf-log"));
-tracer(?REMOTE_PROCESS, _) ->
-    pong = net_adm:ping('remote_node@127.0.0.1'),
+tracer(?REMOTE_PROCESS, Calls) when is_integer(Calls) ->
+    pong = net_adm:ping(?REMOTE_NODE_NAME),
     Acc = acc,
     {ok,_} = dbg:tracer(process,
         {fun(Trace,_) ->
-                {'remote_node@127.0.0.1', receiver_proc} ! Trace,
+                {receiver_proc, ?REMOTE_NODE_NAME} ! Trace,
                 Acc
-         end, Acc});
+         end, Acc}),
+    %% tell the remote receiver process how many calls we're
+    %% expecting
+    {receiver_proc, ?REMOTE_NODE_NAME} ! {expect, self(), Calls};
 tracer(?TCP_PORT, _) ->
     Max_queue = 1000,
     {ok,_} = dbg:tracer(port,
@@ -111,7 +118,12 @@ await_trace_received_completion(?LOCAL_PROCESS) ->
         trace_perf_complete -> ok
     end;
 await_trace_received_completion(?REMOTE_PROCESS) ->
-    ok;
+    receive
+        {received, N} -> io:format("RECEIVED ~p REMOTE TRACES~n", [N])
+    after
+        5000 ->
+            io:format("LIFE IS A FUCK~n")
+    end;
 await_trace_received_completion(?TCP_PORT) ->
     receive
         Msg when element(1,Msg) == 'DOWN' ->
@@ -127,12 +139,27 @@ apply_tracing() ->
     {ok,_} = dbg:tpl(?MODULE, traced_function, 1, []).
 
 be_remote_node() ->
+    io:format("I AM REMOTE NODE~n"),
     register(receiver_proc, self()),
-    be_remote_node2().
+    be_remote_node2(0, undefined).
 
-be_remote_node2() ->
+be_remote_node2(Received_messages, Expectation) ->
     receive
-        _ -> be_remote_node()
+        {expect, Pid, Expected} when is_integer(Expected) ->
+            io:format("EXPECTED ~p~n", [Expected]),
+            be_remote_node2(0, {Pid, Expected});
+        _Trace_log ->
+            % io:format("TRACE LOG ~p~n", [Trace_log]),
+            case Expectation of
+                {Pid, Expected}  when (Received_messages+1) == Expected ->
+                    io:format("REMOTE RECEIVE COMPLETE~n"),
+                    Pid ! {received, Received_messages+1},
+                    be_remote_node2(0, Expectation);
+                undefined ->
+                    be_remote_node2(Received_messages, undefined);
+                _ ->
+                    be_remote_node2(Received_messages+1, Expectation)
+            end
     end.
 
 tracer_tcp_client_proc() ->
