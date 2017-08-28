@@ -3,6 +3,7 @@
 -compile([export_all]).
 
 %% supported tracer types
+-define(IDLE, idle).
 -define(FILE_PORT, file_port).
 -define(TCP_PORT, tcp_port).
 -define(LOCAL_PROCESS, local_process).
@@ -10,13 +11,17 @@
 
 -define(TRACER_TCP_PORT, 6666).
 
+start(idle, _) ->
+    %% do as little as possible to see how much utlisation is
+    %% background noise from the beam
+    timer:sleep(500),
+    erlang:halt(0);
 start(Tracer_type, Calls) ->
     try
         {ok,_} = dbg:start(),
         tracer(Tracer_type, Calls),
         {ok,_} = apply_tracing(),
-
-        Arg = binary:copy(<<"q">>, 1000),
+        Arg = binary:copy(<<"q">>, 10000),
         ok = execute_function_calls(Arg, Calls),
         ok = await_trace_received_completion(Tracer_type),
         ok = dbg:stop()
