@@ -1,4 +1,4 @@
--module(trace_perf).
+-module(traceperf).
 
 -compile([export_all]).
 

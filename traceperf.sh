@@ -1,14 +1,20 @@
 #!/bin/bash
-erlc trace_perf.erl
 
-num_calls=10000
+## exit script on a non-zero return code
+set -e
+
+erlc traceperf.erl
+
+num_calls=100000
 
 trace_file=/tmp/trace-perf-log
 
+otp_release=`erl -noshell -eval "io:format(erlang:system_info(otp_release)), erlang:halt(0)."`
+
 ## set up a remote node that can be contacted from the benchmark
 erl -noshell \
-    -name "remote_node@127.0.0.1" -setcookie trace_perf \
-    -eval "trace_perf:be_remote_node()." &
+    -name "remote_node@127.0.0.1" -setcookie traceperf \
+    -eval "traceperf:be_remote_node()." &
 remote_pid="$!"
 
 # echo "Started remote node"
@@ -17,7 +23,7 @@ remote_pid="$!"
 results_file="results.csv.tmp"
 
 ## csv headers, each row is printed by /usr/bin/time
-echo "type, user, sys, cpu, maxmem, calls" > "${results_file}"
+echo "type, user, sys, cpu, maxmem, calls, otp" > "${results_file}"
 
 for trace_type in tcp_port file_port local_process remote_process; do
     if [ -f "${trace_file}" ]
@@ -25,16 +31,16 @@ for trace_type in tcp_port file_port local_process remote_process; do
         # echo "Deleting File `ls -l \"${trace_file}\"`"
         rm "${trace_file}"
     fi
-    erl_snippet="trace_perf:start(${trace_type}, ${num_calls})."
+    erl_snippet="traceperf:start(${trace_type}, ${num_calls})."
     # echo ${erl_snippet}
     /usr/bin/time --append -o "${results_file}" \
-        --format "${trace_type}, %U, %S, %P, %MkB, ${num_calls}" \
+        --format "${trace_type}, %U, %S, %P, %MkB, ${num_calls}, ${otp_release}" \
         erl -noshell \
-            -name trace_perf@127.0.0.1 -setcookie trace_perf \
+            -name traceperf@127.0.0.1 -setcookie traceperf \
             -eval "${erl_snippet}"
     # strace -c -S calls \
     #     erl -noshell \
-    #         -name trace_perf@127.0.0.1 -setcookie trace_perf \
+    #         -name traceperf@127.0.0.1 -setcookie traceperf \
     #         -eval "${erl_snippet}"
 done
 
