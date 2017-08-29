@@ -94,11 +94,15 @@ tracer(?REMOTE_PROCESS, Calls) when is_integer(Calls) ->
     %% tell the remote receiver process how many calls we're
     %% expecting
     {receiver_proc, ?REMOTE_NODE_NAME} ! {expect, self(), Calls};
-tracer(?TCP_PORT, _) ->
-    Max_queue = 1000,
+tracer(?TCP_PORT, Calls) ->
+    Max_queue = 50000,
     {ok,_} = dbg:tracer(port,
         dbg:trace_port(ip,{?TRACER_TCP_PORT, Max_queue})),
-    _Client_pid = spawn_monitor(fun tracer_tcp_client_proc/0).
+    Self = self(),
+    spawn_opt(
+        ?REMOTE_NODE_NAME, ?MODULE, tracer_tcp_client_proc,
+        [Self, Calls], []).
+
 
 %%
 tracer_process_loop(0) ->
@@ -121,14 +125,16 @@ await_trace_received_completion(?REMOTE_PROCESS) ->
     receive
         {received, N} -> io:format("RECEIVED ~p REMOTE TRACES~n", [N])
     after
-        5000 ->
+        30000 ->
             io:format("LIFE IS A FUCK~n")
     end;
 await_trace_received_completion(?TCP_PORT) ->
     receive
         Msg when element(1,Msg) == 'DOWN' ->
-            io:format("FUCK ~p", [Msg])
-    after 0 ->
+            io:format("FUCK ~p", [Msg]);
+        {received_tcp, _Calls} ->
+            io:format("RECEIVED ~p TCP TRACES ~n", [_Calls])
+    after 30000 ->
         ok
     end,
     ok.
@@ -162,15 +168,36 @@ be_remote_node2(Received_messages, Expectation) ->
             end
     end.
 
-tracer_tcp_client_proc() ->
-    {ok, Socket} = gen_tcp:connect(
-        "localhost", ?TRACER_TCP_PORT, [{active, false}]),
-    tracer_tcp_client_proc_recv(Socket).
+%%
+%% TCP Port Tracer
+%%
 
-tracer_tcp_client_proc_recv(Socket) ->
-    case gen_tcp:recv(Socket, 10240) of
-        {ok,_} ->
-            tracer_tcp_client_proc_recv(Socket);
-        {error,_} = Error ->
-            exit(Error)
+tracer_tcp_client_proc(Pid, Calls) ->
+    {ok, Socket} = gen_tcp:connect(
+        "localhost",
+        ?TRACER_TCP_PORT,
+        [{active, false}, binary]),
+    Result = (catch tracer_tcp_client_proc_recv(Socket, Calls, 0, 0)),
+    io:format("TCP RESULT ~p recbuf:~p~n", [Result, inet:getopts(Socket,[recbuf])]),
+    Pid ! {received_tcp, Calls}.
+
+tracer_tcp_client_proc_recv(_, Calls, Received, Dropped)
+        when Calls == (Received + Dropped) ->
+    {dropped, Dropped};
+tracer_tcp_client_proc_recv(Socket, Calls, Received, Dropped) ->
+    {ok, <<Type:8, Size:32/integer>> = _P} = gen_tcp:recv(Socket, 5),
+    case Type of
+        1 ->
+            tracer_tcp_client_proc_recv(Socket, Calls, Received, Dropped+Size);
+        0 ->
+            % io:format("GOT PACKET SIZE ~p == ~p~n", [Size, _P]),
+            case gen_tcp:recv(Socket, Size) of
+                {ok,_} ->
+                    tracer_tcp_client_proc_recv(Socket, Calls, Received+1, Dropped);
+                {error,enomem} = Error ->
+                    io:format("SIZE WAS ~p TYPE WAS ~p", [Size, Type]),
+                    exit(Error);
+                {error,_} = Error ->
+                    exit(Error)
+            end
     end.
