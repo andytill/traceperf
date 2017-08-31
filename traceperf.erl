@@ -23,7 +23,8 @@ start(Tracer_type, Calls) ->
         {ok,_} = dbg:start(),
         tracer(Tracer_type, Calls),
         {ok,_} = apply_tracing(),
-        Arg = binary:copy(<<"q">>, 5*1024),
+        Arg = lists:duplicate(5*1024, $q),
+        %Arg = binary:copy(<<"q">>, 5*1024),
         ok = execute_function_calls(Arg, Calls),
         ok = await_trace_received_completion(Tracer_type),
         ok = dbg:stop()
@@ -81,8 +82,6 @@ tracer(?LOCAL_PROCESS, Calls) when is_integer(Calls) ->
         {fun(Trace,_) ->
                     Tracer_pid ! Trace, Acc
          end, Acc});
-tracer(?FILE_PORT, _) ->
-    {ok,_} = dbg:tracer(port,dbg:trace_port(file,"/tmp/trace-perf-log"));
 tracer(?REMOTE_PROCESS, Calls) when is_integer(Calls) ->
     pong = net_adm:ping(?REMOTE_NODE_NAME),
     Acc = acc,
@@ -94,8 +93,11 @@ tracer(?REMOTE_PROCESS, Calls) when is_integer(Calls) ->
     %% tell the remote receiver process how many calls we're
     %% expecting
     {receiver_proc, ?REMOTE_NODE_NAME} ! {expect, self(), Calls};
+tracer(?FILE_PORT, _) ->
+    %% file port cannot drop messages
+    {ok,_} = dbg:tracer(port,dbg:trace_port(file,"/tmp/trace-perf-log"));
 tracer(?TCP_PORT, Calls) ->
-    Max_queue = 50000,
+    Max_queue = 100000,
     {ok,_} = dbg:tracer(port,
         dbg:trace_port(ip,{?TRACER_TCP_PORT, Max_queue})),
     Self = self(),
@@ -123,19 +125,18 @@ await_trace_received_completion(?LOCAL_PROCESS) ->
     end;
 await_trace_received_completion(?REMOTE_PROCESS) ->
     receive
-        {received, N} -> io:format("RECEIVED ~p REMOTE TRACES~n", [N])
+        {received, _N} ->
+            ok
     after
-        30000 ->
-            io:format("LIFE IS A FUCK~n")
+        60000 ->
+            io:format("Remote process tracer timed out!~n")
     end;
 await_trace_received_completion(?TCP_PORT) ->
     receive
-        Msg when element(1,Msg) == 'DOWN' ->
-            io:format("FUCK ~p", [Msg]);
         {received_tcp, _Calls} ->
-            io:format("RECEIVED ~p TCP TRACES ~n", [_Calls])
-    after 30000 ->
-        ok
+            ok
+    after 60000 ->
+            io:format("TCP process tracer timed out!~n")
     end,
     ok.
 
@@ -144,21 +145,24 @@ apply_tracing() ->
     {ok,_} = dbg:p(all, c),
     {ok,_} = dbg:tpl(?MODULE, traced_function, 1, []).
 
+%%
+%% Remote node initialisation
+%%
+
 be_remote_node() ->
-    io:format("I AM REMOTE NODE~n"),
     register(receiver_proc, self()),
     be_remote_node2(0, undefined).
 
 be_remote_node2(Received_messages, Expectation) ->
     receive
         {expect, Pid, Expected} when is_integer(Expected) ->
-            io:format("EXPECTED ~p~n", [Expected]),
+            % io:format("EXPECTED ~p~n", [Expected]),
             be_remote_node2(0, {Pid, Expected});
         _Trace_log ->
             % io:format("TRACE LOG ~p~n", [Trace_log]),
             case Expectation of
                 {Pid, Expected}  when (Received_messages+1) == Expected ->
-                    io:format("REMOTE RECEIVE COMPLETE~n"),
+                    % io:format("REMOTE RECEIVE COMPLETE~n"),
                     Pid ! {received, Received_messages+1},
                     be_remote_node2(0, Expectation);
                 undefined ->
@@ -178,7 +182,12 @@ tracer_tcp_client_proc(Pid, Calls) ->
         ?TRACER_TCP_PORT,
         [{active, false}, binary]),
     Result = (catch tracer_tcp_client_proc_recv(Socket, Calls, 0, 0)),
-    io:format("TCP RESULT ~p recbuf:~p~n", [Result, inet:getopts(Socket,[recbuf])]),
+    case Result of
+        {dropped, N} when N > 0 ->
+            io:format("WARNING: TCP tracer dropped ~p trace messages~n", [N]);
+        _ ->
+            ok
+    end,
     Pid ! {received_tcp, Calls}.
 
 tracer_tcp_client_proc_recv(_, Calls, Received, Dropped)

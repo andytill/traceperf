@@ -5,7 +5,7 @@ set -e
 
 erlc traceperf.erl
 
-num_calls=100000
+num_calls=10000
 
 trace_file=/tmp/trace-perf-log
 
@@ -26,6 +26,8 @@ results_file="results.csv.tmp"
 echo "type, elapsed, user, sys, cpu, maxmem, calls, otp" > "${results_file}"
 
 for trace_type in idle tcp_port file_port local_process remote_process; do
+    ## print a dot for every benchmark to show progress
+    echo -n "."
     if [ -f "${trace_file}" ]
     then
         # echo "Deleting File `ls -l \"${trace_file}\"`"
@@ -43,6 +45,9 @@ for trace_type in idle tcp_port file_port local_process remote_process; do
     #         -name traceperf@127.0.0.1 -setcookie traceperf \
     #         -eval "${erl_snippet}"
 done
+
+## newline from the progress dots
+echo ""
 
 ## format the results into a new file
 column -t ${results_file} > "results.csv"
