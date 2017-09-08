@@ -9,7 +9,8 @@ num_calls=10000
 
 trace_file=/tmp/trace-perf-log
 
-otp_release=`erl -noshell -eval "io:format(erlang:system_info(otp_release)), erlang:halt(0)."`
+
+KERL_DIR="$HOME/kerl"
 
 ## set up a remote node that can be contacted from the benchmark
 erl -noshell \
@@ -22,10 +23,17 @@ remote_pid="$!"
 
 results_file="results.csv.tmp"
 
+RUNS=1
+
 ## csv headers, each row is printed by /usr/bin/time
 echo "type, elapsed, user, sys, cpu, maxmem, calls, otp" > "${results_file}"
 
+
+for otp in "18.0"  "19.3"  "20.0"; do
+    source ${KERL_DIR}/${otp}/activate
+    otp_release=`erl -noshell -eval "io:format(erlang:system_info(otp_release)), erlang:halt(0)."`
 for trace_type in idle tcp_port file_port local_process remote_process; do
+for i in $(seq 1 $RUNS); do
     ## print a dot for every benchmark to show progress
     echo -n "."
     if [ -f "${trace_file}" ]
@@ -44,7 +52,9 @@ for trace_type in idle tcp_port file_port local_process remote_process; do
     #     erl -noshell \
     #         -name traceperf@127.0.0.1 -setcookie traceperf \
     #         -eval "${erl_snippet}"
-done
+done ## number of runs
+done ## tracer type
+done ## otp version
 
 ## newline from the progress dots
 echo ""
